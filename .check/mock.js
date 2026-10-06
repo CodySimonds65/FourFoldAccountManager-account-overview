@@ -25,7 +25,8 @@
       rate: 9800, script: ['Battle', 'Battle', 'Town'], earn: { xp: 160, silver: 220, gold: 0 }, stopsAt: 4 },
     { id: 'a3', label: 'Banker', isOpen: true, className: null, level: null, xp: null, next: null, silver: 720000, gold: 12,
       rate: null, script: ['Town'], earn: { xp: 0, silver: 0, gold: 0 } },
-    { id: 'a4', label: 'Closed one', isOpen: false }
+    { id: 'a4', label: 'Closed one', isOpen: false, className: 'Rogue', level: 5, xp: 10, next: 500, silver: 900, gold: 2,
+      rate: null, script: ['Town'], earn: { xp: 0, silver: 0, gold: 0 } }
   ];
   let minute = 0;
   const listeners = { accounts: new Set(), xp: new Set() };

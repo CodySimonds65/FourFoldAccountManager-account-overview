@@ -64,11 +64,11 @@ export function applyRead(session, read) {
   const gained = previous !== null && (silver > 0 || increase(previous.gold, read.gold) > 0 || xpGained(previous, read));
   // By either end of the interval: the last battle's reward can arrive in the minute that ends back in town.
   if (gained && (isFighting(previous.location) || isFighting(read.location))) session.earned = true;
-  if (!previous || read.at - previous.at > MAX_INTERVAL_MS) {
-    // Nothing trustworthy to measure from, so both the idle clock and the rate start fresh here.
-    session.lastGainAt = read.at;
-  } else {
-    if (gained) session.lastGainAt = read.at;
+  // A gain restarts the idle clock, and so does one that arrived somewhere in a gap. A gap with nothing gained
+  // doesn't.
+  if (!previous || gained) session.lastGainAt = read.at;
+  // What happened across a gap is unknown, so no rate is measured over it.
+  if (previous && read.at - previous.at <= MAX_INTERVAL_MS) {
     session.intervals.push({ from: previous.at, to: read.at, silver });
   }
   session.intervals = session.intervals.filter(interval => interval.to > read.at - HOUR_MS);
@@ -108,7 +108,10 @@ export function describe(account, session, remembered, now) {
   } else if (!read) {
     view.state = 'waiting';
   } else if (session.stale) {
-    view.state = 'stale';
+    // Unread and idle can't be told apart, so there is no idle time. The last known rates and place still stand.
+    Object.assign(view, {
+      state: 'stale', xpPerHour: read.xpPerHour, silverPerHour: silverPerHour(session), location: read.location
+    });
   } else {
     const idleMs = session.earned ? Math.max(0, now - session.lastGainAt) : null;
     Object.assign(view, {
@@ -123,28 +126,48 @@ export function describe(account, session, remembered, now) {
 export function totalsOf(views) {
   const sum = (list, key) => list.reduce((total, view) => total + (Number.isFinite(view[key]) ? view[key] : 0), 0);
   const live = views.filter(view => view.state === 'live');
+  // One failed read doesn't take an account's rates out of the totals.
+  const rated = views.filter(view => view.state === 'live' || view.state === 'stale');
   const idle = live.filter(view => view.idle);
+  // Values that come from an earlier session: a closed account's, and a just-opened one's until its first read.
+  const lastSeen = view => (view.state === 'closed' || view.state === 'waiting') &&
+    (Number.isFinite(view.silver) || Number.isFinite(view.gold));
   return {
     open: views.filter(view => view.state === 'live' || view.state === 'stale' || view.state === 'waiting').length,
     idle: idle.length,
     idleLabels: idle.map(view => view.label),
-    xpPerHour: sum(live, 'xpPerHour'),
-    silverPerHour: sum(live, 'silverPerHour'),
+    xpPerHour: sum(rated, 'xpPerHour'),
+    silverPerHour: sum(rated, 'silverPerHour'),
     silver: sum(views, 'silver'),
     gold: sum(views, 'gold'),
-    closedCounted: views.filter(view => view.state === 'closed' && (Number.isFinite(view.silver) || Number.isFinite(view.gold))).length
+    lastSeenCounted: views.filter(lastSeen).length
   };
 }
 
-// Keeps what a closed account will show. Returns whether the store now needs saving: when a value changed, or when
-// the saved time has fallen ten minutes behind.
+// Keeps what a closed account will show. The time is always the latest read's, so "how long ago" is right the
+// moment an account closes. Returns whether the store now needs saving: when a value changed, or when the saved copy
+// has fallen ten minutes behind.
 export function remember(remembered, accountId, read) {
   const before = remembered[accountId];
   const same = before && before.className === read.className && before.level === read.level &&
     before.silver === read.silver && before.gold === read.gold;
-  if (same && read.at - before.at < REFRESH_MS) return false;
-  remembered[accountId] = { className: read.className, level: read.level, silver: read.silver, gold: read.gold, at: read.at };
-  return true;
+  const save = !same || read.at - (before.savedAt ?? before.at) >= REFRESH_MS;
+  remembered[accountId] = {
+    className: read.className, level: read.level, silver: read.silver, gold: read.gold, at: read.at,
+    savedAt: save ? read.at : before.savedAt ?? before.at
+  };
+  return save;
+}
+
+// The start of a text, as whole characters, in at most `max` UTF-16 units (what FourFold counts a card's 40 in):
+// a cut never splits an emoji in two.
+export function prefix(text, max) {
+  let kept = '';
+  for (const character of text) {
+    if (kept.length + character.length > max) break;
+    kept += character;
+  }
+  return kept;
 }
 
 // Drops accounts that no longer exist. Returns whether anything was dropped.

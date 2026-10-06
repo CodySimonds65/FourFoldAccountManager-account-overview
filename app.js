@@ -1,11 +1,14 @@
 // Account overview: every account at a glance, with totals, and a marker for an open account that has stopped
 // earning. The working-out is in overview.mjs.
-import { applyRead, createSession, describe, forget, loadRemembered, remember, toRead, totalsOf } from './overview.mjs';
+import {
+  applyRead, createSession, describe, forget, loadRemembered, prefix, remember, toRead, totalsOf
+} from './overview.mjs';
 
 const totalsBox = document.getElementById('totals');
 const list = document.getElementById('accounts');
 const sessions = new Map(); // account id -> session; open accounts only
 let remembered = {};
+let unsaved = false; // whether `remembered` has changes that haven't reached storage yet
 
 const known = value => typeof value === 'number' && Number.isFinite(value);
 const exact = value => Math.round(value).toLocaleString('en-US');
@@ -15,7 +18,7 @@ const short = value => (Math.abs(value) >= 100000 ? compact.format(value) : exac
 // A card refuses text over 40 characters, and text with control or invisible formatting characters.
 const fit = text => {
   const plain = text.replace(/[\p{Cc}\p{Cf}]/gu, '');
-  return plain.length > 40 ? `${plain.slice(0, 39)}…` : plain;
+  return plain.length > 40 ? `${prefix(plain, 39)}…` : plain;
 };
 
 function ago(ms) {
@@ -59,7 +62,12 @@ function line(...parts) {
 // What sits to the right of the label: where the account is, or why its numbers aren't live.
 function marker(view, now) {
   if (view.state === 'live' && view.idle) return element('span', 'marker idle', `Idle ${ago(view.idleMs)}`);
-  if (view.state === 'live') return element('span', 'marker', view.location ?? '');
+  if (view.state === 'live') {
+    // A long place name is cut to fit, with the whole of it on hover.
+    const place = element('span', 'marker', view.location ?? '');
+    place.title = view.location ?? '';
+    return place;
+  }
   if (view.state === 'stale') return element('span', 'marker', 'Stale');
   if (view.state === 'waiting') return element('span', 'marker', 'Waiting');
   if (view.state === 'closed') return element('span', 'marker', `${ago(now - view.at)} ago`);
@@ -79,9 +87,11 @@ function block(view, now) {
   }
 
   const who = `${view.className ?? 'No class yet'}${known(view.level) ? ` ${view.level}` : ''}`;
-  root.append(view.state === 'live' ? line(who, number(view.xpPerHour, 'XP/hr')) : line(who));
+  // A stale account keeps its last known rates, dimmed.
+  const rated = view.state === 'live' || view.state === 'stale';
+  root.append(rated ? line(who, number(view.xpPerHour, 'XP/hr')) : line(who));
   const balances = [number(view.silver, 'silver'), number(view.gold, 'gold')];
-  if (view.state === 'live') {
+  if (rated) {
     balances.push(known(view.silverPerHour) ? number(view.silverPerHour, 'silver/hr') : element('span', '', 'No rate yet'));
   }
   root.append(line(...balances));
@@ -95,8 +105,8 @@ function draw(views, totals, now) {
     line(number(totals.xpPerHour, 'XP/hr'), number(totals.silverPerHour, 'silver/hr')),
     line(number(totals.silver, 'silver'), number(totals.gold, 'gold'))
   ];
-  if (totals.closedCounted > 0) {
-    const accounts = totals.closedCounted === 1 ? '1 closed account' : `${totals.closedCounted} closed accounts`;
+  if (totals.lastSeenCounted > 0) {
+    const accounts = totals.lastSeenCounted === 1 ? '1 account' : `${totals.lastSeenCounted} accounts`;
     summary.push(element('p', 'muted', `Includes ${accounts} as last seen.`));
   }
   totalsBox.replaceChildren(...summary);
@@ -121,18 +131,28 @@ async function setCard(totals) {
 
 async function refresh() {
   const accounts = await fourfold.accounts.list();
-  let changed = forget(remembered, new Set(accounts.map(account => account.id)));
-  // A closed account's session is over.
+  if (forget(remembered, new Set(accounts.map(account => account.id)))) unsaved = true;
+  // A closed account's session is over. Its last values are saved now, so "how long ago" survives a restart.
   for (const id of [...sessions.keys()]) {
-    if (!accounts.some(account => account.id === id && account.isOpen)) sessions.delete(id);
+    if (!accounts.some(account => account.id === id && account.isOpen)) {
+      sessions.delete(id);
+      unsaved = true;
+    }
   }
 
   for (const account of accounts.filter(candidate => candidate.isOpen)) {
     let session = sessions.get(account.id);
     if (!session) sessions.set(account.id, (session = createSession()));
-    const read = toRead(await fourfold.xp.get(account.id), await fourfold.profile.get(account.id));
+    const xp = await fourfold.xp.get(account.id);
+    const profile = await fourfold.profile.get(account.id);
+    // FourFold has started this account's tracking over (its profile was edited, say). The reads before and after
+    // may not even be of the same player, so the session starts over too.
+    if (xp.updatedAt === null && session.last) sessions.set(account.id, (session = createSession()));
+    // Both answers come from one read. If a new read landed between the two calls, wait for the next refresh.
+    if (xp.updatedAt !== profile.updatedAt) continue;
+    const read = toRead(xp, profile);
     applyRead(session, read);
-    if (read && remember(remembered, account.id, read)) changed = true;
+    if (read && remember(remembered, account.id, read)) unsaved = true;
   }
 
   const now = Date.now();
@@ -141,7 +161,14 @@ async function refresh() {
   draw(views, totals, now);
   // A refused card or a failed save must not stop the panel from updating.
   await setCard(totals).catch(error => console.warn(error.code ?? error.message));
-  if (changed) await fourfold.storage.set('remembered', remembered).catch(error => console.warn(error.code ?? error.message));
+  // A refused save is tried again at the next refresh.
+  if (unsaved) {
+    unsaved = false;
+    await fourfold.storage.set('remembered', remembered).catch(error => {
+      unsaved = true;
+      console.warn(error.code ?? error.message);
+    });
+  }
 }
 
 // Events arrive in bursts (xp.onUpdated fires once per account). Refreshes run one after another, and a burst asks

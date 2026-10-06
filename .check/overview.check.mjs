@@ -1,7 +1,7 @@
 // Checks overview.mjs outside FourFold. Run: node .check/overview.check.mjs
 import assert from 'node:assert/strict';
 import {
-  applyRead, createSession, describe, forget, loadRemembered, remember, silverPerHour, toRead, totalsOf
+  applyRead, createSession, describe, forget, loadRemembered, prefix, remember, silverPerHour, toRead, totalsOf
 } from '../overview.mjs';
 
 const MIN = 60000;
@@ -64,13 +64,17 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
 
 // A stale account is Stale, not idle: unread and idle can't be told apart. It keeps its last values.
 {
-  const session = feed(read(0, { silver: 700, rate: 4000 }), read(1, { silver: 700 }));
+  const session = feed(read(0, { silver: 700, rate: 4000 }), read(1, { silver: 760, rate: 4000 }));
   applyRead(session, null);
   const stale = describe(open, session, {}, at(30));
   assert.equal(stale.state, 'stale');
   assert.equal(stale.idle, false);
-  assert.equal(stale.silver, 700);
-  assert.equal(stale.xpPerHour, null);
+  assert.equal(stale.silver, 760);
+  // One failed read doesn't take the account's rates out of the totals: the last known ones stand.
+  assert.equal(stale.xpPerHour, 4000);
+  assert.equal(stale.silverPerHour, 3600);
+  assert.equal(totalsOf([stale]).xpPerHour, 4000);
+  assert.equal(totalsOf([stale]).silverPerHour, 3600);
 
   applyRead(session, read(31, { silver: 700 }));
   assert.equal(describe(open, session, {}, at(31)).state, 'live');
@@ -80,6 +84,12 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
 {
   assert.equal(describe(open, createSession(), {}, at(0)).state, 'waiting');
   const remembered = { a: { className: 'Mage', level: 7, silver: 50, gold: 5, at: at(-120) } };
+  // An account that has just been opened shows its remembered values until its first read, and they are counted as
+  // "last seen" like a closed account's.
+  const justOpened = describe(open, createSession(), remembered, at(0));
+  assert.equal(justOpened.state, 'waiting');
+  assert.equal(justOpened.silver, 50);
+  assert.equal(totalsOf([justOpened]).lastSeenCounted, 1);
   assert.deepEqual(describe(closed, undefined, remembered, at(0)), {
     id: 'a', label: 'Main', state: 'closed', className: 'Mage', level: 7, xpPerHour: null, silver: 50, gold: 5,
     silverPerHour: null, location: null, idle: false, idleMs: null, at: at(-120)
@@ -100,7 +110,13 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
   assert.equal(silverPerHour(session), 0);
 }
 
-// A gap of more than three minutes is unknown: no interval is measured across it, and idle starts fresh after it.
+// A gap with nothing gained across it leaves the idle clock running. Only a gain restarts it.
+{
+  const session = feed(read(0), read(1, { xp: 10 }), read(2, { xp: 10 }), read(20, { xp: 10 }));
+  assert.equal(describe(open, session, {}, at(20)).idleMs, 19 * MIN);
+}
+
+// A gap of more than three minutes is unknown: no interval is measured across it. A gain across it restarts idle.
 {
   const session = feed(read(0, { silver: 0 }), read(1, { silver: 10, xp: 5 }), read(10, { silver: 9000 }));
   assert.equal(silverPerHour(session), 600);
@@ -119,7 +135,7 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
     describe({ id: 'd', label: 'D', isOpen: false }, undefined, remembered, at(5))
   ];
   assert.deepEqual(totalsOf(views), {
-    open: 2, idle: 1, idleLabels: ['A'], xpPerHour: 3000, silverPerHour: 6100, silver: 350, gold: 8, closedCounted: 1
+    open: 2, idle: 1, idleLabels: ['A'], xpPerHour: 3000, silverPerHour: 6100, silver: 350, gold: 8, lastSeenCounted: 1
   });
 }
 
@@ -127,12 +143,13 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
 {
   const remembered = {};
   assert.equal(remember(remembered, 'a', read(0, { silver: 5, gold: 1 })), true);
-  assert.deepEqual(remembered, { a: { className: 'Warrior', level: 10, silver: 5, gold: 1, at: at(0) } });
-  // Unchanged values aren't worth a write every minute, but the time is refreshed every ten.
+  assert.deepEqual(remembered, { a: { className: 'Warrior', level: 10, silver: 5, gold: 1, at: at(0), savedAt: at(0) } });
+  // Unchanged values aren't worth a write every minute, but a write every ten. The time on show is always the
+  // latest read's, so "how long ago" is right the moment the account closes.
   assert.equal(remember(remembered, 'a', read(1, { silver: 5, gold: 1 })), false);
-  assert.equal(remembered.a.at, at(0));
+  assert.equal(remembered.a.at, at(1));
   assert.equal(remember(remembered, 'a', read(10, { silver: 5, gold: 1 })), true);
-  assert.equal(remembered.a.at, at(10));
+  assert.equal(remembered.a.savedAt, at(10));
   assert.equal(remember(remembered, 'a', read(11, { silver: 6, gold: 1 })), true);
   assert.equal(forget(remembered, new Set(['a'])), false);
   assert.equal(forget(remembered, new Set(['b'])), true);
@@ -151,5 +168,8 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
   assert.equal(toRead({ ...xp, isStale: true }, profile), null);
   assert.equal(toRead({ ...xp, updatedAt: null }, profile), null);
 }
+
+// A cut never lands in the middle of an emoji.
+assert.equal(prefix('ab😀cd', 3), 'ab');
 
 console.log('overview.mjs: all checks passed');
