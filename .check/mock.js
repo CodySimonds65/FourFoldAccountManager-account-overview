@@ -110,7 +110,9 @@
     out.textContent = lines.join('\n');
   }
 
-  // For trying things by hand from the browser's console: previewToggle('a2') closes or reopens an account.
+  // For trying things by hand from the browser's console: previewStore() shows what the plugin has saved, and
+  // previewToggle('a2') closes or reopens an account.
+  window.previewStore = () => Object.fromEntries(store);
   window.previewToggle = id => {
     const account = find(id);
     account.isOpen = !account.isOpen;

@@ -27,6 +27,25 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
   assert.equal(view.idleMs, null);
 }
 
+// A deposit doesn't make a bank account a fighter: only a gain made in an arena, a dungeon or a battle arms the marker.
+{
+  const bank = feed(
+    read(0, { silver: 720000, location: 'Town' }),
+    read(1, { silver: 720000, location: 'Town' }),
+    read(2, { silver: 1620000, gold: 5, location: 'Town' }),
+    ...[3, 4, 5, 6, 7, 8, 9, 10].map(minute => read(minute, { silver: 1620000, gold: 5, location: 'Town' })));
+  const view = describe(open, bank, {}, at(10));
+  assert.equal(view.idle, false);
+  assert.equal(view.idleMs, null);
+
+  // The last battle's reward can arrive in the minute that ends back in town. It still counts as fighting.
+  const fighter = feed(
+    read(0, { location: ' battle ' }),
+    read(1, { xp: 40, silver: 90, location: 'Town' }),
+    ...[2, 3, 4, 5, 6].map(minute => read(minute, { xp: 40, silver: 90, location: 'Town' })));
+  assert.equal(describe(open, fighter, {}, at(6)).idle, true);
+}
+
 // The idle marker: it appears five minutes after the last gain, counts up, and clears on the next one.
 {
   const session = feed(read(0), read(1, { xp: 10 }), ...[2, 3, 4, 5, 6].map(minute => read(minute, { xp: 10 })));

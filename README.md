@@ -2,8 +2,9 @@
 
 A plugin for [FourFold Account Manager](https://github.com/CodySimonds65/FourFoldAccountManager). It shows every
 account at a glance: class, level, XP per hour, silver, gold and where the character is, with totals across accounts.
-An open account that was earning and then earns nothing for 5 minutes is marked "Idle", so you notice one that has
-stopped. An account that hasn't earned anything since it was opened, a bank account say, is left alone.
+An open account that was fighting and then earns nothing for 5 minutes is marked "Idle", so you notice one that has
+stopped. An account that hasn't earned anything in an arena, a dungeon or a battle since it was opened, a bank
+account say, is left alone, deposits and all.
 
 It is listed on the [plugin hub](https://github.com/CodySimonds65/FourFoldAccountManager-plugin-hub), so FourFold
 users install it from the plugin list: the wrench in the plugin strip, then **Plugin hub**.

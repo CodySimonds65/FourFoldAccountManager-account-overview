@@ -5,10 +5,14 @@
 const HOUR_MS = 3600000;
 // Reads are a minute apart. A longer gap means reads were missed, and what happened in it is unknown.
 const MAX_INTERVAL_MS = 3 * 60000;
-// An open account that was earning and then has no gain for this long is shown as idle.
+// An open account that was fighting and then has no gain for this long is shown as idle.
 export const IDLE_MS = 5 * 60000;
 // A closed account's "last seen" time is saved again this often even when its values haven't changed.
 const REFRESH_MS = 10 * 60000;
+
+// The profile page never names the arena: it says Arena in every hub, Dungeon inside one, and Battle in a fight.
+const FIGHTING = ['arena', 'dungeon', 'battle'];
+const isFighting = location => typeof location === 'string' && FIGHTING.includes(location.trim().toLowerCase());
 
 // One answer pair from fourfold.xp.get and fourfold.profile.get. Null when it isn't a read: the account is closed
 // or stale. An account with no class yet is still a read, because its balances are worth showing.
@@ -38,7 +42,8 @@ function xpGained(before, after) {
 }
 
 // One open account, as seen since it was opened. Kept in memory only. `earned` is whether it has gained anything
-// yet: an account that never has, a bank account say, is parked, not idle.
+// while fighting yet: an account that never has, a bank account say, is parked, not idle, and a deposit into it
+// doesn't change that.
 export function createSession() {
   return { last: null, lastGainAt: null, earned: false, intervals: [], stale: false };
 }
@@ -57,7 +62,8 @@ export function applyRead(session, read) {
 
   const silver = previous ? increase(previous.silver, read.silver) : 0;
   const gained = previous !== null && (silver > 0 || increase(previous.gold, read.gold) > 0 || xpGained(previous, read));
-  if (gained) session.earned = true;
+  // By either end of the interval: the last battle's reward can arrive in the minute that ends back in town.
+  if (gained && (isFighting(previous.location) || isFighting(read.location))) session.earned = true;
   if (!previous || read.at - previous.at > MAX_INTERVAL_MS) {
     // Nothing trustworthy to measure from, so both the idle clock and the rate start fresh here.
     session.lastGainAt = read.at;
