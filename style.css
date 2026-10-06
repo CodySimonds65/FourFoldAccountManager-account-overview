@@ -1,0 +1,12 @@
+body { margin: 0; padding: 14px; background: var(--ff-surface); color: var(--ff-text); font: 13px "Segoe UI", sans-serif; }
+h1 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+p { margin: 3px 0 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.muted { color: var(--ff-text-muted); }
+#totals { background: var(--ff-surface-raised); border: 1px solid var(--ff-accent); border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+#totals .big { margin: 0; font-size: 15px; font-weight: 700; color: var(--ff-accent); }
+.account { background: var(--ff-surface-raised); border: 1px solid var(--ff-border); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+.account.stale p, .account.closed, .account.none { color: var(--ff-text-muted); }
+.head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.label { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.marker { flex: none; color: var(--ff-text-muted); font-size: 11px; }
+.marker.idle { color: var(--ff-danger); font-weight: 700; }

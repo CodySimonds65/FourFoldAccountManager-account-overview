@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- The panel in an ordinary browser, on made-up data from mock.js. Serve the repository's folder over http (a page
+     opened from disk can't load modules), for example: python -m http.server 8765 -- then open
+     http://localhost:8765/.check/preview.html in a window about 250 pixels wide, the panel's width in FourFold. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account overview (preview)</title>
+  <link rel="stylesheet" href="../style.css">
+  <style>#preview-cards { margin-top: 16px; white-space: pre-wrap; font: 10px Consolas, monospace; color: #98A4B1; }</style>
+</head>
+<body>
+  <h1>Account overview</h1>
+  <div id="totals"></div>
+  <div id="accounts"></div>
+  <pre id="preview-cards"></pre>
+  <script src="mock.js"></script>
+  <script type="module" src="../app.js"></script>
+</body>
+</html>

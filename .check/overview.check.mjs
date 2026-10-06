@@ -1,0 +1,136 @@
+// Checks overview.mjs outside FourFold. Run: node .check/overview.check.mjs
+import assert from 'node:assert/strict';
+import {
+  applyRead, createSession, describe, forget, loadRemembered, remember, silverPerHour, toRead, totalsOf
+} from '../overview.mjs';
+
+const MIN = 60000;
+const start = Date.UTC(2026, 9, 5, 12, 0);
+const at = minute => start + minute * MIN;
+// A read at `minute` with the active class's XP, the client's XP rate and the balances as given.
+const read = (minute, { xp = 0, level = 10, silver = 0, gold = 0, rate = null, className = 'Warrior', location = 'Battle' } = {}) =>
+  ({ at: at(minute), className, level, currentXp: xp, nextLevelXp: 1000, xpPerHour: rate, silver, gold, location });
+const feed = (...reads) => {
+  const session = createSession();
+  for (const next of reads) applyRead(session, next);
+  return session;
+};
+const open = { id: 'a', label: 'Main', isOpen: true };
+const closed = { id: 'a', label: 'Main', isOpen: false };
+
+// An account that hasn't earned anything this session is parked, not idle: a bank account must not show as a problem.
+{
+  const parked = feed(...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(minute => read(minute, { silver: 500 })));
+  const view = describe(open, parked, {}, at(10));
+  assert.equal(view.state, 'live');
+  assert.equal(view.idle, false);
+  assert.equal(view.idleMs, null);
+}
+
+// The idle marker: it appears five minutes after the last gain, counts up, and clears on the next one.
+{
+  const session = feed(read(0), read(1, { xp: 10 }), ...[2, 3, 4, 5, 6].map(minute => read(minute, { xp: 10 })));
+  assert.equal(describe(open, session, {}, at(6) - 1000).idle, false);
+  const idle = describe(open, session, {}, at(6));
+  assert.equal(idle.state, 'live');
+  assert.equal(idle.idle, true);
+  assert.equal(idle.idleMs, 5 * MIN);
+  assert.equal(describe(open, session, {}, at(9)).idleMs, 8 * MIN);
+
+  applyRead(session, read(10, { xp: 10, gold: 1 }));
+  const earning = describe(open, session, {}, at(10));
+  assert.equal(earning.idle, false);
+  assert.equal(earning.idleMs, 0);
+}
+
+// A stale account is Stale, not idle: unread and idle can't be told apart. It keeps its last values.
+{
+  const session = feed(read(0, { silver: 700, rate: 4000 }), read(1, { silver: 700 }));
+  applyRead(session, null);
+  const stale = describe(open, session, {}, at(30));
+  assert.equal(stale.state, 'stale');
+  assert.equal(stale.idle, false);
+  assert.equal(stale.silver, 700);
+  assert.equal(stale.xpPerHour, null);
+
+  applyRead(session, read(31, { silver: 700 }));
+  assert.equal(describe(open, session, {}, at(31)).state, 'live');
+}
+
+// Open with nothing read yet, closed with remembered values, and closed with none.
+{
+  assert.equal(describe(open, createSession(), {}, at(0)).state, 'waiting');
+  const remembered = { a: { className: 'Mage', level: 7, silver: 50, gold: 5, at: at(-120) } };
+  assert.deepEqual(describe(closed, undefined, remembered, at(0)), {
+    id: 'a', label: 'Main', state: 'closed', className: 'Mage', level: 7, xpPerHour: null, silver: 50, gold: 5,
+    silverPerHour: null, location: null, idle: false, idleMs: null, at: at(-120)
+  });
+  assert.equal(describe(closed, undefined, {}, at(0)).state, 'none');
+}
+
+// Silver per hour: earned only, over the hour ending at the latest read.
+{
+  assert.equal(silverPerHour(feed(read(0, { silver: 1000 }))), null);
+  const session = feed(read(0, { silver: 1000 }), read(1, { silver: 1100 }), read(2, { silver: 1100 }));
+  assert.equal(silverPerHour(session), 3000);
+  applyRead(session, read(3, { silver: 500 }));
+  assert.equal(silverPerHour(session), 2000);
+  // An hour on, the old gains have dropped out of the window. The long gap itself is never measured.
+  applyRead(session, read(64, { silver: 500 }));
+  applyRead(session, read(65, { silver: 500 }));
+  assert.equal(silverPerHour(session), 0);
+}
+
+// A gap of more than three minutes is unknown: no interval is measured across it, and idle starts fresh after it.
+{
+  const session = feed(read(0, { silver: 0 }), read(1, { silver: 10, xp: 5 }), read(10, { silver: 9000 }));
+  assert.equal(silverPerHour(session), 600);
+  assert.equal(describe(open, session, {}, at(10)).idleMs, 0);
+}
+
+// Totals: rates over live accounts, balances over every account with a known value, and how many of those are closed.
+{
+  const idleSession = feed(read(-1, { silver: 90, gold: 1, rate: 1000 }), ...[0, 1, 2, 3, 4, 5].map(minute => read(minute, { silver: 100, gold: 1, rate: 1000 })));
+  const busySession = feed(read(4, { silver: 100, gold: 2, rate: 2000 }), read(5, { silver: 200, gold: 2, rate: 2000 }));
+  const remembered = { c: { className: 'Mage', level: 7, silver: 50, gold: 5, at: at(-60) } };
+  const views = [
+    describe({ id: 'a', label: 'A', isOpen: true }, idleSession, remembered, at(5)),
+    describe({ id: 'b', label: 'B', isOpen: true }, busySession, remembered, at(5)),
+    describe({ id: 'c', label: 'C', isOpen: false }, undefined, remembered, at(5)),
+    describe({ id: 'd', label: 'D', isOpen: false }, undefined, remembered, at(5))
+  ];
+  assert.deepEqual(totalsOf(views), {
+    open: 2, idle: 1, idleLabels: ['A'], xpPerHour: 3000, silverPerHour: 6100, silver: 350, gold: 8, closedCounted: 1
+  });
+}
+
+// What is remembered for a closed account, and when the store needs saving.
+{
+  const remembered = {};
+  assert.equal(remember(remembered, 'a', read(0, { silver: 5, gold: 1 })), true);
+  assert.deepEqual(remembered, { a: { className: 'Warrior', level: 10, silver: 5, gold: 1, at: at(0) } });
+  // Unchanged values aren't worth a write every minute, but the time is refreshed every ten.
+  assert.equal(remember(remembered, 'a', read(1, { silver: 5, gold: 1 })), false);
+  assert.equal(remembered.a.at, at(0));
+  assert.equal(remember(remembered, 'a', read(10, { silver: 5, gold: 1 })), true);
+  assert.equal(remembered.a.at, at(10));
+  assert.equal(remember(remembered, 'a', read(11, { silver: 6, gold: 1 })), true);
+  assert.equal(forget(remembered, new Set(['a'])), false);
+  assert.equal(forget(remembered, new Set(['b'])), true);
+  assert.deepEqual(remembered, {});
+  assert.deepEqual(loadRemembered('junk'), {});
+  assert.deepEqual(loadRemembered({ a: { silver: 1 } }), { a: { silver: 1 } });
+}
+
+// What counts as a read at all. An account with no class yet still has balances worth showing.
+{
+  const xp = { className: null, level: null, currentXp: null, nextLevelXp: null, xpPerHour: null, updatedAt: '2026-10-05T12:00:00Z', isStale: false };
+  const profile = { silver: 7, gold: 1, location: 'Town' };
+  assert.deepEqual(toRead(xp, profile), {
+    at: start, className: null, level: null, currentXp: null, nextLevelXp: null, xpPerHour: null, silver: 7, gold: 1, location: 'Town'
+  });
+  assert.equal(toRead({ ...xp, isStale: true }, profile), null);
+  assert.equal(toRead({ ...xp, updatedAt: null }, profile), null);
+}
+
+console.log('overview.mjs: all checks passed');
