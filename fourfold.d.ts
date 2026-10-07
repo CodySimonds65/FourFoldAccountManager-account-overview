@@ -1,6 +1,6 @@
 // Types for window.fourfold, the API FourFold Account Manager gives a plugin's page.
 //
-// Describes plugin API version 2. The current copy of this file is in the plugin template:
+// Describes plugin API version 3. The current copy of this file is in the plugin template:
 //   https://github.com/CodySimonds65/FourFoldAccountManager-plugin-template/blob/main/fourfold.d.ts
 // The API is documented in full in PLUGIN_AUTHORS.md:
 //   https://github.com/CodySimonds65/FourFoldAccountManager/blob/main/PLUGIN_AUTHORS.md
@@ -262,6 +262,92 @@ declare namespace FourFold {
     apiVersion: number;
   }
 
+  /** What the live game feed reports when a fight starts. */
+  interface LiveBattleStarted {
+    accountId: string;
+    enemyCount: number;
+    /** When the app received it (ISO 8601, UTC). */
+    at: string;
+  }
+
+  /**
+   * A fight ended. The game doesn't say whether it was won: a win is a `battle.result` that follows, and an end with
+   * no result is an escape or a loss.
+   */
+  interface LiveBattleEnded {
+    accountId: string;
+    at: string;
+  }
+
+  interface LiveStatGains {
+    maxHp: number;
+    maxSp: number;
+    hp: number;
+    sp: number;
+    att: number;
+    mag: number;
+    skl: number;
+    spd: number;
+    def: number;
+    res: number;
+    lck: number;
+  }
+
+  /** A fight's reward, as the game showed it. `expGained` already includes any double-XP event. */
+  interface LiveBattleResult {
+    accountId: string;
+    expGained: number;
+    silverGained: number;
+    expNeededToNextLevel: number;
+    leveledUp: boolean;
+    reachedLevel: number;
+    className: string | null;
+    /** Comma-joined when several unlock at once; at most 64 characters. */
+    unlockedSkillName: string | null;
+    statGains: LiveStatGains;
+    at: string;
+  }
+
+  /** A skill's outcome. One roll per cast: a miss misses every target. */
+  interface LiveSkillResult {
+    accountId: string;
+    skillName: string | null;
+    outcome: 'hit' | 'miss' | 'rejected';
+    targetsAffected: number;
+    reason: string | null;
+    at: string;
+  }
+
+  /** Where an account is: the game's own scene name, such as `westhills_b2_dungeon_01`. */
+  interface LiveLocation {
+    accountId: string;
+    scene: string | null;
+    inBattle: boolean;
+    at: string;
+  }
+
+  interface LiveSession {
+    accountId: string;
+    at: string;
+  }
+
+  /**
+   * The game connection ended: a kick (with the server's reason), a reload or a closed panel (`reason` null). It also
+   * ends any open fight: a fight cut off by a reload never gets `battle.onEnded`, and after the re-login the game
+   * resumes it with a new `battle.onStarted`.
+   */
+  interface LiveDisconnect {
+    accountId: string;
+    reason: string | null;
+    at: string;
+  }
+
+  /** Whether live events are flowing. `unavailable` comes with a reason, such as a game update FourFold can't read yet. */
+  interface LiveStatus {
+    state: 'active' | 'off' | 'unavailable';
+    reason: string | null;
+  }
+
   /**
    * `window.fourfold`. Every call returns a promise. A call that is refused rejects with an {@link ApiError},
    * and a rejected call never stops your plugin.
@@ -365,6 +451,37 @@ declare namespace FourFold {
       set(cardId: string, accountId: string | null, content: CardContent): Promise<void>;
       /** Empties a card. `accountId` is as for `set`: an account id for an `account` card, `null` for a `global` one. */
       clear(cardId: string, accountId: string | null): Promise<void>;
+    };
+
+    /**
+     * Live fights from the user's own game panels, as they happen. API 3, and only while FourFold's live game feed
+     * is on: check `live.getStatus()`. On an older FourFold this namespace doesn't exist.
+     */
+    readonly battle: {
+      onStarted(callback: (event: LiveBattleStarted) => void): Unsubscribe;
+      onEnded(callback: (event: LiveBattleEnded) => void): Unsubscribe;
+      onResult(callback: (event: LiveBattleResult) => void): Unsubscribe;
+      onSkillResult(callback: (event: LiveSkillResult) => void): Unsubscribe;
+    };
+
+    /** Where each account is, from the live game feed. API 3. */
+    readonly location: {
+      /** The account's current scene, or `null` with no live data for it. An unknown id is rejected with `invalid-argument`. */
+      get(accountId: string): Promise<LiveLocation | null>;
+      onChanged(callback: (event: LiveLocation) => void): Unsubscribe;
+    };
+
+    /** Game logins and disconnections, from the live game feed. API 3. */
+    readonly session: {
+      /** A successful login only. */
+      onLoggedIn(callback: (event: LiveSession) => void): Unsubscribe;
+      onDisconnected(callback: (event: LiveDisconnect) => void): Unsubscribe;
+    };
+
+    /** The live game feed's status. API 3. */
+    readonly live: {
+      getStatus(): Promise<LiveStatus>;
+      onStatusChanged(callback: (status: LiveStatus) => void): Unsubscribe;
     };
   }
 }

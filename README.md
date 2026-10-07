@@ -11,7 +11,11 @@ users install it from the plugin list: the wrench in the plugin strip, then **Pl
 
 ## What to know
 
-- FourFold reads an account about once a minute, and only while its game is open. The numbers are as fresh as that.
+- Where FourFold has the live game feed, each fight counts as it happens: silver per hour moves at once, "Idle"
+  means no fight for 5 minutes, and the place is the game's own area name, such as "Westhills B2 · Dungeon 1".
+- Otherwise, or when the feed is switched off or unavailable, FourFold reads an account about once a minute, and
+  only while its game is open. The numbers are as fresh as that, and the place is what the profile page says
+  (Arena, Dungeon or Battle).
 - A closed account shows the values from its last read while this plugin was running, and how long ago that was.
   Those values are counted in the total silver and gold, and the panel says so.
 - XP per hour is FourFold's own XP tracker rate. Silver per hour is worked out here, over the last hour, counting

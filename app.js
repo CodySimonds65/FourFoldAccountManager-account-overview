@@ -1,7 +1,9 @@
 // Account overview: every account at a glance, with totals, and a marker for an open account that has stopped
-// earning. The working-out is in overview.mjs.
+// earning. The working-out is in overview.mjs. Where FourFold has the live game feed, silver, idle and place come
+// from its events; otherwise, and for class, XP and balances, from FourFold's reads.
 import {
-  applyRead, createSession, describe, forget, loadRemembered, prefix, remember, toRead, totalsOf
+  applyLiveFight, applyLiveResult, applyRead, createSession, describe, endLive, forget, loadRemembered, prefix,
+  remember, startLive, toRead, totalsOf
 } from './overview.mjs';
 
 const totalsBox = document.getElementById('totals');
@@ -9,6 +11,9 @@ const list = document.getElementById('accounts');
 const sessions = new Map(); // account id -> session; open accounts only
 let remembered = {};
 let unsaved = false; // whether `remembered` has changes that haven't reached storage yet
+// The live game feed (plugin API 3): missing on an older FourFold, and only used while its status is active.
+const hasFeed = typeof fourfold.battle?.onResult === 'function';
+let feedActive = false;
 
 const known = value => typeof value === 'number' && Number.isFinite(value);
 const exact = value => Math.round(value).toLocaleString('en-US');
@@ -143,6 +148,11 @@ async function refresh() {
   for (const account of accounts.filter(candidate => candidate.isOpen)) {
     let session = sessions.get(account.id);
     if (!session) sessions.set(account.id, (session = createSession()));
+    // Live only while the feed is watching this account: location.get has a place for it. One already in game when
+    // the feed was switched on has none until its game reconnects, and stays on reads.
+    const place = feedActive ? await fourfold.location.get(account.id).catch(() => null) : null;
+    if (place) startLive(session, Date.now(), place.scene);
+    else endLive(session);
     const xp = await fourfold.xp.get(account.id);
     const profile = await fourfold.profile.get(account.id);
     // FourFold has started this account's tracking over (its profile was edited, say). The reads before and after
@@ -191,6 +201,38 @@ async function start() {
   fourfold.xp.onUpdated(render);
   // The idle markers count up between reads too.
   setInterval(render, 60000);
+  if (hasFeed) {
+    feedActive = (await fourfold.live.getStatus().catch(() => null))?.state === 'active';
+    fourfold.live.onStatusChanged(status => {
+      feedActive = status.state === 'active';
+      render();
+    });
+    const live = accountId => sessions.get(accountId)?.live ? sessions.get(accountId) : null;
+    fourfold.location.onChanged(({ accountId, scene }) => {
+      const session = live(accountId);
+      if (session) startLive(session, Date.now(), scene);
+      render();
+    });
+    fourfold.session.onDisconnected(({ accountId }) => {
+      const session = sessions.get(accountId);
+      if (session) endLive(session);
+      render();
+    });
+    const fight = ({ accountId, at }) => {
+      const session = live(accountId);
+      if (!session) return;
+      applyLiveFight(session, Date.parse(at));
+      render();
+    };
+    fourfold.battle.onStarted(fight);
+    fourfold.battle.onEnded(fight);
+    fourfold.battle.onResult(({ accountId, silverGained, at }) => {
+      const session = live(accountId);
+      if (!session) return;
+      applyLiveResult(session, silverGained, Date.parse(at));
+      render();
+    });
+  }
   await render();
 }
 

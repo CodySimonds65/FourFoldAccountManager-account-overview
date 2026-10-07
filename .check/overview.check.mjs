@@ -1,7 +1,8 @@
 // Checks overview.mjs outside FourFold. Run: node .check/overview.check.mjs
 import assert from 'node:assert/strict';
 import {
-  applyRead, createSession, describe, forget, loadRemembered, prefix, remember, silverPerHour, toRead, totalsOf
+  LIVE_RATE_MIN_MS, applyLiveFight, applyLiveResult, applyRead, createSession, describe, endLive, forget,
+  loadRemembered, prefix, remember, silverPerHour, startLive, toRead, totalsOf
 } from '../overview.mjs';
 
 const MIN = 60000;
@@ -167,6 +168,53 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
   });
   assert.equal(toRead({ ...xp, isStale: true }, profile), null);
   assert.equal(toRead({ ...xp, updatedAt: null }, profile), null);
+}
+
+// Live: idle counts from the last fight, and an account that never fights while watched is still parked, not idle.
+{
+  const session = feed(read(0, { location: 'Town' }));
+  startLive(session, at(0), 'town_square');
+  applyRead(session, read(1, { location: 'Town' }));
+  assert.equal(describe(open, session, {}, at(30)).idle, false);
+  applyLiveFight(session, at(31));
+  applyLiveResult(session, 50, at(32));
+  assert.equal(describe(open, session, {}, at(37) - 1000).idle, false);
+  const idle = describe(open, session, {}, at(37));
+  assert.equal(idle.idle, true);
+  assert.equal(idle.idleMs, 5 * MIN);
+  // The place is the game's own area, not the profile page's word for it.
+  startLive(session, at(38), 'westhills_b2_dungeon_01');
+  assert.equal(describe(open, session, {}, at(38)).location, 'Westhills B2 · Dungeon 1');
+}
+
+// Live silver counts each fight once. A read while live adds nothing, even though its balance holds the same silver,
+// and the first read after a live stretch only starts a new baseline.
+{
+  const session = feed(read(0, { silver: 1000 }));
+  startLive(session, at(0), 'arena_01');
+  applyLiveResult(session, 300, at(1));
+  applyRead(session, read(1.5, { silver: 1300 }));
+  applyLiveResult(session, 300, at(2));
+  applyLiveResult(session, 300, at(2)); // the same fight again
+  // 600 over 2 watched minutes is 18,000 an hour; 4 idle minutes later it is 6,000.
+  assert.equal(Math.round(silverPerHour(session, at(2))), 18000);
+  assert.equal(Math.round(silverPerHour(session, at(6))), 6000);
+  endLive(session);
+  applyRead(session, read(3, { silver: 1600 }));
+  assert.equal(session.intervals.length, 2);
+  applyRead(session, read(4, { silver: 1700 }));
+  assert.equal(session.intervals.length, 3);
+  // Back on reads, idle counts from the last gain they show again.
+  assert.equal(describe(open, session, {}, at(7)).idleMs, 3 * MIN);
+}
+
+// No live rate until a minute has been watched: the first fight can't read as millions an hour.
+{
+  const session = feed(read(0));
+  startLive(session, at(0), 'arena_01');
+  applyLiveResult(session, 500, at(0.25));
+  assert.equal(silverPerHour(session, at(0) + LIVE_RATE_MIN_MS - 1), null);
+  assert.notEqual(silverPerHour(session, at(0) + LIVE_RATE_MIN_MS), null);
 }
 
 // A cut never lands in the middle of an emoji.
