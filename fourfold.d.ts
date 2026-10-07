@@ -70,6 +70,12 @@ declare namespace FourFold {
    * An account's XP, as FourFold's own XP tracker reads it: about once a minute, and only while the account is
    * open. For a closed account, and for an open one that hasn't been read yet, the number and text fields are
    * `null`, `classes` is empty and `isStale` is `true`.
+   *
+   * While the live game feed watches the account, `className`, `level`, `currentXp`, `nextLevelXp`,
+   * `xpUntilNextLevel`, `hoursUntilNextLevel`, `xpPerHour`, `sessionXp` and the active class's row in `classes`
+   * follow each fight. `updatedAt` and `isStale` still describe the last read, so a value that changed while
+   * `updatedAt` stayed the same is a fight, not a new read. Don't work out your own XP/hr from changes in
+   * `currentXp` on top of this: `xpPerHour` already counts each fight, so you would count it twice.
    */
   interface Xp {
     /** The active class. `null` until the account has been read, and for a closed account. */
@@ -84,13 +90,19 @@ declare namespace FourFold {
     xpUntilNextLevel: number | null;
     /** At the current XP/hr. `null` when there is no rate yet. */
     hoursUntilNextLevel: number | null;
-    /** The current rate. `null` until there is enough data for one. */
+    /**
+     * The current rate, over the last hour as of the moment you ask, so it falls while the account is idle. While
+     * the live game feed watches the account it follows each fight. `null` until there is enough data for one.
+     */
     xpPerHour: number | null;
     /** XP gained this session. `0` when unknown. */
     sessionXp: number;
     /** Every class. May be empty. */
     classes: ClassXp[];
-    /** Time of the last successful read, as an ISO 8601 date. `null` before the first one, and for a closed account. */
+    /**
+     * Time of the last successful read (the poll), as an ISO 8601 date. It only changes with a new read, and stays
+     * put through live updates. `null` before the first one, and for a closed account.
+     */
     updatedAt: string | null;
     /** `true` when there is no XP data yet, when the last read failed, and for a closed account. */
     isStale: boolean;
@@ -296,15 +308,23 @@ declare namespace FourFold {
   /** A fight's reward, as the game showed it. `expGained` already includes any double-XP event. */
   interface LiveBattleResult {
     accountId: string;
+    /** XP the fight gave. Any double-XP event is already included. */
     expGained: number;
+    /** Silver the fight gave. */
     silverGained: number;
+    /** XP still needed to reach the next level, as the game showed it. */
     expNeededToNextLevel: number;
+    /** `true` when the fight raised the class's level. */
     leveledUp: boolean;
+    /** The level the class reached. */
     reachedLevel: number;
+    /** The class that earned the fight. `null` when unknown. */
     className: string | null;
-    /** Comma-joined when several unlock at once; at most 64 characters. */
+    /** The skill the fight unlocked, or `null` when none. Comma-joined when several unlock at once; at most 64 characters. */
     unlockedSkillName: string | null;
+    /** The points the fight added to each stat. */
     statGains: LiveStatGains;
+    /** When FourFold received it (ISO 8601). */
     at: string;
   }
 
@@ -321,8 +341,11 @@ declare namespace FourFold {
   /** Where an account is: the game's own scene name, such as `westhills_b2_dungeon_01`. */
   interface LiveLocation {
     accountId: string;
+    /** The game's own scene name. Can be `null`. */
     scene: string | null;
+    /** `true` in a fight scene. */
     inBattle: boolean;
+    /** When FourFold received it (ISO 8601). */
     at: string;
   }
 
@@ -342,9 +365,14 @@ declare namespace FourFold {
     at: string;
   }
 
-  /** Whether live events are flowing. `unavailable` comes with a reason, such as a game update FourFold can't read yet. */
+  /**
+   * Whether live events are flowing. An account already in game when the feed is switched on sends nothing until
+   * its game reconnects.
+   */
   interface LiveStatus {
+    /** `active` while the feed is on and reading, `off` when the user switched it off, `unavailable` when FourFold can't read the game. */
     state: 'active' | 'off' | 'unavailable';
+    /** Why the state is `unavailable`, such as a game update FourFold can't read yet. `null` otherwise. */
     reason: string | null;
   }
 
@@ -371,11 +399,15 @@ declare namespace FourFold {
 
     /** An account's class, level and XP rate. */
     readonly xp: {
-      /** An account's XP. An id that isn't one of the user's accounts is rejected with `invalid-argument`. */
+      /**
+       * An account's XP. While the live game feed watches the account, most values follow each fight; see {@link Xp}.
+       * An id that isn't one of the user's accounts is rejected with `invalid-argument`.
+       */
       get(accountId: string): Promise<Xp>;
       /**
-       * Calls `callback` when that account's XP data changes, about once a minute for each open account. It fires
-       * once per account, so several can arrive together: run your redraws one after another.
+       * Calls `callback` when that account's XP data changes: about once a minute for each open account (a read),
+       * after each fight while the live game feed watches it, and after a reset. It fires once per account, so
+       * several can arrive together: run your redraws one after another.
        */
       onUpdated(callback: (event: { accountId: string }) => void): Unsubscribe;
     };
@@ -384,7 +416,9 @@ declare namespace FourFold {
     readonly stats: {
       /**
        * The active class's stats, or `null` when the account is closed or hasn't been read yet. There is no stats
-       * event: read it again when `xp.onUpdated` fires. An unknown account id is rejected with `invalid-argument`.
+       * event: read it again when `xp.onUpdated` fires. While the live game feed watches the account, `level`
+       * follows each fight; the stats themselves come from the last read. An unknown account id is rejected with
+       * `invalid-argument`.
        */
       get(accountId: string): Promise<Stats | null>;
     };
@@ -458,29 +492,44 @@ declare namespace FourFold {
      * is on: check `live.getStatus()`. On an older FourFold this namespace doesn't exist.
      */
     readonly battle: {
+      /** Calls `callback` when a fight starts. */
       onStarted(callback: (event: LiveBattleStarted) => void): Unsubscribe;
+      /** Calls `callback` when a fight ends. */
       onEnded(callback: (event: LiveBattleEnded) => void): Unsubscribe;
+      /** Calls `callback` when a fight is won. */
       onResult(callback: (event: LiveBattleResult) => void): Unsubscribe;
+      /** Calls `callback` when a skill is used. */
       onSkillResult(callback: (event: LiveSkillResult) => void): Unsubscribe;
     };
 
     /** Where each account is, from the live game feed. API 3. */
     readonly location: {
-      /** The account's current scene, or `null` with no live data for it. An unknown id is rejected with `invalid-argument`. */
+      /**
+       * The account's current scene, or `null` when FourFold has no live data for it: a closed account, or one that
+       * hasn't changed place since the feed started. An account already in game when the feed is switched on sends
+       * nothing until its game reconnects. An unknown id is rejected with `invalid-argument`.
+       */
       get(accountId: string): Promise<LiveLocation | null>;
+      /** Calls `callback` when an account changes place. */
       onChanged(callback: (event: LiveLocation) => void): Unsubscribe;
     };
 
     /** Game logins and disconnections, from the live game feed. API 3. */
     readonly session: {
-      /** A successful login only. */
+      /** Calls `callback` when an account logs in to the game. A successful login only. */
       onLoggedIn(callback: (event: LiveSession) => void): Unsubscribe;
+      /**
+       * Calls `callback` when an account's game connection ends: a kick (with the server's text in `reason`), a
+       * reload or a closed panel (`reason` `null`).
+       */
       onDisconnected(callback: (event: LiveDisconnect) => void): Unsubscribe;
     };
 
     /** The live game feed's status. API 3. */
     readonly live: {
+      /** The feed's state, and the reason when it is `unavailable`. */
       getStatus(): Promise<LiveStatus>;
+      /** Calls `callback` when the feed's status changes. */
       onStatusChanged(callback: (status: LiveStatus) => void): Unsubscribe;
     };
   }
