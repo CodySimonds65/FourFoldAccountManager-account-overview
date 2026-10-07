@@ -217,6 +217,19 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
   assert.notEqual(silverPerHour(session, at(0) + LIVE_RATE_MIN_MS), null);
 }
 
+// A repeated read takes the XP fields FourFold updates after each live fight, and nothing else: no gain, no idle
+// change, no interval.
+{
+  const session = feed(read(0, { xp: 10, silver: 100, rate: 1000 }));
+  applyRead(session, read(0, { xp: 60, level: 11, silver: 999, rate: 5000 }));
+  assert.equal(session.last.currentXp, 60);
+  assert.equal(session.last.level, 11);
+  assert.equal(session.last.xpPerHour, 5000);
+  assert.equal(session.last.silver, 100);
+  assert.equal(session.intervals.length, 0);
+  assert.equal(session.lastGainAt, at(0));
+}
+
 // A cut never lands in the middle of an emoji.
 assert.equal(prefix('ab😀cd', 3), 'ab');
 

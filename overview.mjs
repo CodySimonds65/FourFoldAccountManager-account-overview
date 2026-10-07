@@ -59,8 +59,18 @@ export function applyRead(session, read) {
   }
   session.stale = false;
   const previous = session.last;
-  // The same read again: xp.onUpdated also fires for changes that aren't a new read.
-  if (previous && read.at <= previous.at) return;
+  // The same read again: xp.onUpdated also fires for changes that aren't a new read. While FourFold's live game feed
+  // watches the account, it fires after each fight with these XP fields moved on and the read's time unchanged, so
+  // those are taken; nothing else is.
+  if (previous && read.at <= previous.at) {
+    if (read.at === previous.at) {
+      Object.assign(previous, {
+        className: read.className, level: read.level, currentXp: read.currentXp, nextLevelXp: read.nextLevelXp,
+        xpPerHour: read.xpPerHour
+      });
+    }
+    return;
+  }
   session.last = read;
 
   const silver = previous ? increase(previous.silver, read.silver) : 0;
