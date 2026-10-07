@@ -48,7 +48,7 @@ function xpGained(before, after) {
 // doesn't change that. `live` is null while everything comes from reads, and { lastMark, lastFightAt, scene } while
 // the live game feed is watching the account: then silver, idle and place come from its events.
 export function createSession() {
-  return { last: null, lastGainAt: null, earned: false, intervals: [], stale: false, live: null, rebase: false };
+  return { last: null, lastGainAt: null, earned: false, intervals: [], stale: false, live: null, rebase: 0 };
 }
 
 // Takes the latest answer for an open account: a read, or null when FourFold has none to give.
@@ -81,19 +81,21 @@ export function applyRead(session, read) {
   // doesn't.
   if (!previous || gained) session.lastGainAt = read.at;
   // What happened across a gap is unknown, so no rate is measured over it. While live, the fights count the silver,
-  // and the first read after a live stretch only starts a new baseline: its silver was counted from the fights too.
-  if (session.live || session.rebase) {
-    if (!session.live) session.rebase = false;
+  // and the first two reads after a live stretch only start a new baseline: their silver was counted from the fights
+  // too, and the profile can lag the last fight by a read.
+  if (session.live || session.rebase > 0) {
+    if (!session.live) session.rebase -= 1;
   } else if (previous && read.at - previous.at <= MAX_INTERVAL_MS) {
     session.intervals.push({ from: previous.at, to: read.at, silver });
   }
   session.intervals = session.intervals.filter(interval => interval.to > read.at - HOUR_MS);
 }
 
-// The live game feed is watching the account from `at` on, in `scene` (from fourfold.location.get).
-export function startLive(session, at, scene) {
+// The live game feed is watching the account from `at` on, in `scene` (from fourfold.location.get). A fight's own
+// scene isn't a place to show, so the last place outside a fight stays.
+export function startLive(session, at, scene, inBattle = false) {
   if (!session.live) session.live = { lastMark: at, lastFightAt: null, scene: null };
-  if (typeof scene === 'string') session.live.scene = scene;
+  if (typeof scene === 'string' && !inBattle) session.live.scene = scene;
 }
 
 // A fight started or ended. It restarts the idle clock, and an account that fights isn't parked.
@@ -104,23 +106,31 @@ export function applyLiveFight(session, at) {
 }
 
 // A fight's reward from battle.onResult. Its silver counts from the last mark (the watch start or the previous
-// fight's reward) to now, so the time between fights is in the rate too.
+// fight's reward) to now, so the time between fights is in the rate too. A result with the same time as the last one
+// came in the same batch of game data, so it joins that fight's interval.
 export function applyLiveResult(session, silver, at) {
-  if (!session.live || !Number.isFinite(at) || at <= session.live.lastMark) return;
+  if (!session.live || !Number.isFinite(at) || at < session.live.lastMark) return;
   applyLiveFight(session, at);
   const gain = Number.isFinite(silver) ? Math.max(0, silver) : 0;
+  if (at === session.live.lastMark) {
+    const last = session.intervals.at(-1);
+    if (last?.to === at) last.silver += gain;
+    return;
+  }
   session.intervals.push({ from: session.live.lastMark, to: at, silver: gain });
   session.live.lastMark = at;
   session.intervals = session.intervals.filter(interval => interval.to > at - HOUR_MS);
 }
 
-// The feed stopped watching (a disconnect, or the feed switched off). The idle clock carries on from the last fight.
-export function endLive(session) {
+// The feed stopped watching at `at` (a disconnect, or the feed switched off). The idle clock carries on from the last
+// fight, and the time since the last fight's reward was watched and earned nothing, so it stays in the rate.
+export function endLive(session, at) {
   if (!session.live) return;
+  if (at > session.live.lastMark) session.intervals.push({ from: session.live.lastMark, to: at, silver: 0 });
   const lastFightAt = session.live.lastFightAt;
   if (lastFightAt !== null) session.lastGainAt = Math.max(session.lastGainAt ?? lastFightAt, lastFightAt);
   session.live = null;
-  session.rebase = true;
+  session.rebase = 2;
 }
 
 // Silver earned per hour over the hour ending at the latest read, or null when nothing in it was measured. The same
@@ -148,8 +158,8 @@ function rateOver(intervals, now, minCovered) {
 }
 
 // Everything one account's block shows. `session` is the open account's session, if it has one; `remembered` is
-// what was saved for accounts read earlier. States: live (open and read), stale (open, but FourFold has no fresh
-// read), waiting (open, nothing read yet), closed (showing remembered values) and none (closed, nothing known).
+// what was saved for accounts read earlier. States: live (open and read, or watched by the live game feed), stale
+// (open, but FourFold has no fresh read and the feed isn't watching it), waiting (open, nothing read yet), closed (showing remembered values) and none (closed, nothing known).
 export function describe(account, session, remembered, now) {
   const view = {
     id: account.id, label: account.label, state: 'none', className: null, level: null, xpPerHour: null, silver: null,
@@ -164,13 +174,14 @@ export function describe(account, session, remembered, now) {
     view.state = known ? 'closed' : 'none';
   } else if (!read) {
     view.state = 'waiting';
-  } else if (session.stale) {
+  } else if (session.stale && !session.live) {
     // Unread and idle can't be told apart, so there is no idle time. The last known rates and place still stand.
     Object.assign(view, {
       state: 'stale', xpPerHour: read.xpPerHour, silverPerHour: silverPerHour(session, now), location: read.location
     });
   } else {
-    // While live, idle counts from the last fight; before the first one, from the last gain seen in reads.
+    // While live, idle counts from the last fight; before the first one, from the last gain seen in reads. A failed
+    // read changes none of that: the feed still sees the fights, and class, XP and balances stay the last known.
     const since = session.live?.lastFightAt ?? session.lastGainAt;
     const idleMs = session.earned ? Math.max(0, now - since) : null;
     const location = session.live?.scene ? areaName(session.live.scene) : read.location;

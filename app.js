@@ -151,13 +151,17 @@ async function refresh() {
     // Live only while the feed is watching this account: location.get has a place for it. One already in game when
     // the feed was switched on has none until its game reconnects, and stays on reads.
     const place = feedActive ? await fourfold.location.get(account.id).catch(() => null) : null;
-    if (place) startLive(session, Date.now(), place.scene);
-    else endLive(session);
+    if (place) startLive(session, Date.now(), place.scene, place.inBattle);
+    else endLive(session, Date.now());
     const xp = await fourfold.xp.get(account.id);
     const profile = await fourfold.profile.get(account.id);
     // FourFold has started this account's tracking over (its profile was edited, say). The reads before and after
     // may not even be of the same player, so the session starts over too.
-    if (xp.updatedAt === null && session.last) sessions.set(account.id, (session = createSession()));
+    // The feed still watches the account, so the new session is live from now.
+    if (xp.updatedAt === null && session.last) {
+      sessions.set(account.id, (session = createSession()));
+      if (place) startLive(session, Date.now(), place.scene, place.inBattle);
+    }
     // Both answers come from one read. If a new read landed between the two calls, wait for the next refresh.
     if (xp.updatedAt !== profile.updatedAt) continue;
     const read = toRead(xp, profile);
@@ -208,14 +212,16 @@ async function start() {
       render();
     });
     const live = accountId => sessions.get(accountId)?.live ? sessions.get(accountId) : null;
-    fourfold.location.onChanged(({ accountId, scene }) => {
-      const session = live(accountId);
-      if (session) startLive(session, Date.now(), scene);
+    // The account is live from its first place, not from the next refresh, so a fight that ends before that refresh
+    // (one resumed right after F5, say) still counts. An account without a session yet is left to the refresh.
+    fourfold.location.onChanged(({ accountId, scene, inBattle }) => {
+      const session = sessions.get(accountId);
+      if (feedActive && scene !== null && session) startLive(session, Date.now(), scene, inBattle);
       render();
     });
     fourfold.session.onDisconnected(({ accountId }) => {
       const session = sessions.get(accountId);
-      if (session) endLive(session);
+      if (session) endLive(session, Date.now());
       render();
     });
     const fight = ({ accountId, at }) => {

@@ -188,24 +188,73 @@ const closed = { id: 'a', label: 'Main', isOpen: false };
 }
 
 // Live silver counts each fight once. A read while live adds nothing, even though its balance holds the same silver,
-// and the first read after a live stretch only starts a new baseline.
+// and the first two reads after a live stretch only start a new baseline.
 {
   const session = feed(read(0, { silver: 1000 }));
   startLive(session, at(0), 'arena_01');
   applyLiveResult(session, 300, at(1));
   applyRead(session, read(1.5, { silver: 1300 }));
   applyLiveResult(session, 300, at(2));
-  applyLiveResult(session, 300, at(2)); // the same fight again
+  applyLiveResult(session, 300, at(1)); // a late fight
   // 600 over 2 watched minutes is 18,000 an hour; 4 idle minutes later it is 6,000.
   assert.equal(Math.round(silverPerHour(session, at(2))), 18000);
   assert.equal(Math.round(silverPerHour(session, at(6))), 6000);
-  endLive(session);
+  endLive(session, at(2));
   applyRead(session, read(3, { silver: 1600 }));
+  applyRead(session, read(4, { silver: 1600 }));
   assert.equal(session.intervals.length, 2);
-  applyRead(session, read(4, { silver: 1700 }));
+  applyRead(session, read(5, { silver: 1700 }));
   assert.equal(session.intervals.length, 3);
   // Back on reads, idle counts from the last gain they show again.
-  assert.equal(describe(open, session, {}, at(7)).idleMs, 3 * MIN);
+  assert.equal(describe(open, session, {}, at(8)).idleMs, 3 * MIN);
+}
+
+// The profile can lag the last fight by a read, so the second read after a live stretch may be the first to show the
+// fight's silver. It is a baseline too: the silver was counted from the fight.
+{
+  const session = feed(read(0, { silver: 1000 }));
+  startLive(session, at(0.5), 'arena_01');
+  applyLiveResult(session, 500, at(1));
+  endLive(session, at(1.1));
+  applyRead(session, read(1.2, { silver: 1000 })); // lags the fight
+  applyRead(session, read(2.2, { silver: 1500 })); // the fight's silver at last
+  applyRead(session, read(3.2, { silver: 1600 }));
+  assert.deepEqual(session.intervals.map(interval => interval.silver), [500, 0, 100]);
+}
+
+// Leaving live keeps the idle time watched since the last fight, so the polled rate doesn't jump: 3,000 silver over
+// 30 minutes of fights and 30 idle is about 3,000 an hour either side of the switch.
+{
+  const session = feed(read(0));
+  startLive(session, at(0), 'arena_01');
+  for (let minute = 1; minute <= 30; minute++) applyLiveResult(session, 100, at(minute));
+  assert.equal(Math.round(silverPerHour(session, at(60))), 3000);
+  endLive(session, at(60));
+  applyRead(session, read(60.5, { silver: 3000 }));
+  assert.ok(Math.abs(silverPerHour(session) - 3000) < 100);
+}
+
+// Two results with the same time are one batch of game data: both count, in the same interval.
+{
+  const session = feed(read(0));
+  startLive(session, at(0), 'arena_01');
+  applyLiveResult(session, 300, at(2));
+  applyLiveResult(session, 200, at(2));
+  assert.deepEqual(session.intervals.map(interval => interval.silver), [500]);
+}
+
+// A failed read while the feed watches the account: idle, place and silver per hour still come from the feed.
+{
+  const session = feed(read(0, { rate: 4000 }));
+  startLive(session, at(0), 'westhills_b2_dungeon_01');
+  applyLiveResult(session, 700, at(1));
+  applyRead(session, null);
+  const view = describe(open, session, {}, at(7));
+  assert.equal(view.state, 'live');
+  assert.equal(view.idleMs, 6 * MIN);
+  assert.equal(view.location, 'Westhills B2 · Dungeon 1');
+  assert.equal(view.xpPerHour, 4000);
+  assert.equal(view.silverPerHour, 6000);
 }
 
 // No live rate until a minute has been watched: the first fight can't read as millions an hour.

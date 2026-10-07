@@ -20,7 +20,9 @@ users install it from the plugin list: the wrench in the plugin strip, then **Pl
   Those values are counted in the total silver and gold, and the panel says so.
 - XP per hour is FourFold's own XP tracker rate. Silver per hour is worked out here, over the last hour, counting
   silver earned only: spending doesn't lower it.
-- "Stale" means FourFold has no fresh read for an open account, so the plugin can't tell whether it is idle.
+- "Stale" means FourFold has no fresh read for an open account, so the plugin can't tell whether it is idle. Where
+  the live feed watches the account, a failed read doesn't make it stale: idle, place and silver per hour still come
+  from the feed, and class, XP and balances stay the last known.
 - One overlay card, "Accounts", shows the totals and the names of idle accounts.
 
 ## For plugin authors
