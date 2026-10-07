@@ -91,8 +91,9 @@ declare namespace FourFold {
     /** At the current XP/hr. `null` when there is no rate yet. */
     hoursUntilNextLevel: number | null;
     /**
-     * The current rate, over the last hour as of the moment you ask, so it falls while the account is idle. While
-     * the live game feed watches the account it follows each fight. `null` until there is enough data for one.
+     * The current rate, over the last hour. While the live game feed watches the account it follows each fight and
+     * is worked out as of the moment you ask, so it falls while the account is idle; otherwise it is the rate at the
+     * last read. `null` until there is enough data for one.
      */
     xpPerHour: number | null;
     /** XP gained this session. `0` when unknown. */
