@@ -14,6 +14,7 @@ let unsaved = false; // whether `remembered` has changes that haven't reached st
 // The live game feed (plugin API 3): missing on an older FourFold, and only used while its status is active.
 const hasFeed = typeof fourfold.battle?.onResult === 'function';
 let feedActive = false;
+let accounts = []; // the account list from the latest refresh, which the once-a-second redraw works from
 
 const known = value => typeof value === 'number' && Number.isFinite(value);
 const exact = value => Math.round(value).toLocaleString('en-US');
@@ -135,7 +136,7 @@ async function setCard(totals) {
 }
 
 async function refresh() {
-  const accounts = await fourfold.accounts.list();
+  accounts = await fourfold.accounts.list();
   if (forget(remembered, new Set(accounts.map(account => account.id)))) unsaved = true;
   // A closed account's session is over. Its last values are saved now, so "how long ago" survives a restart.
   for (const id of [...sessions.keys()]) {
@@ -173,6 +174,7 @@ async function refresh() {
   const views = accounts.map(account => describe(account, sessions.get(account.id), remembered, now));
   const totals = totalsOf(views);
   draw(views, totals, now);
+  syncTimer();
   // A refused card or a failed save must not stop the panel from updating.
   await setCard(totals).catch(error => console.warn(error.code ?? error.message));
   // A refused save is tried again at the next refresh.
@@ -197,6 +199,48 @@ function render() {
     return refresh();
   }).catch(error => console.warn(error.code ?? error.message));
   return queue;
+}
+
+// While an account is live, its rates are worked out at the time of asking and fall every second between fights, so
+// the panel redraws once a second. Only the panel: the card and the saved values keep the refresh's schedule, and a
+// read is never applied here, so no gain, idle time or interval changes. A tick waits its turn behind a refresh, and
+// at most one waits.
+let timer = null;
+let ticking = false;
+let pressed = false; // a mouse button is held: a redraw would rebuild a block under it
+document.addEventListener('pointerdown', () => { pressed = true; }, true);
+for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, () => { pressed = false; }, true);
+
+function syncTimer() {
+  const live = [...sessions.values()].some(session => session.live);
+  if (live && timer === null) timer = setInterval(tick, 1000);
+  else if (!live && timer !== null) {
+    clearInterval(timer);
+    timer = null;
+  }
+}
+
+function tick() {
+  if (ticking) return;
+  ticking = true;
+  queue = queue.then(async () => {
+    ticking = false;
+    if (pressed) return;
+    for (const account of accounts) {
+      const session = sessions.get(account.id);
+      if (!account.isOpen || !session?.live || !session.last) continue;
+      // A rejected read leaves this account as it was for this tick.
+      const xp = await fourfold.xp.get(account.id).catch(() => null);
+      // The rate, and the class and XP beside it, are live in xp.get. A different read time means a new poll landed,
+      // which only the next refresh may apply.
+      if (!xp || xp.isStale || Date.parse(xp.updatedAt) !== session.last.at) continue;
+      const { xpPerHour, level, className, currentXp, nextLevelXp } = xp;
+      Object.assign(session.last, { xpPerHour, level, className, currentXp, nextLevelXp });
+    }
+    const now = Date.now();
+    const views = accounts.map(account => describe(account, sessions.get(account.id), remembered, now));
+    draw(views, totalsOf(views), now);
+  }).catch(error => console.warn(error.code ?? error.message));
 }
 
 async function start() {
